@@ -19,6 +19,11 @@ spring:
     problemdetails:
       enabled: true
 
+logging:
+  structured:
+    format:
+      console: logstash
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html

@@ -20,6 +20,7 @@ import io.github.omerbar4.paymentledger.domain.TransferCorrelation;
 import io.github.omerbar4.paymentledger.exception.ApiException;
 import io.github.omerbar4.paymentledger.iso.Pacs002Mapper;
 import io.github.omerbar4.paymentledger.iso.Pacs008Mapper;
+import io.github.omerbar4.paymentledger.metrics.CtaCommitMetrics;
 import io.github.omerbar4.paymentledger.repository.AccountRepository;
 import io.github.omerbar4.paymentledger.repository.AuthGrantRepository;
 import io.github.omerbar4.paymentledger.repository.DecisionRepository;
@@ -37,8 +38,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * The only component that changes a balance for a payment event.
@@ -53,9 +58,11 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class CommitAuthorizationService {
 
+    private static final Logger log = LoggerFactory.getLogger(CommitAuthorizationService.class);
     private static final String EVENT_KEY_PREFIX = "cta-event:";
 
     private final CtaProperties properties;
+    private final CtaCommitMetrics commitMetrics;
     private final AuthGrantRepository grants;
     private final DecisionRepository decisions;
     private final LedgerEffectRepository ledger;
@@ -69,13 +76,15 @@ public class CommitAuthorizationService {
     private final Pacs008Mapper pacs008;
     private final Pacs002Mapper pacs002;
 
-    public CommitAuthorizationService(CtaProperties properties, AuthGrantRepository grants,
+    public CommitAuthorizationService(CtaProperties properties, CtaCommitMetrics commitMetrics,
+                                      AuthGrantRepository grants,
                                       DecisionRepository decisions, LedgerEffectRepository ledger,
                                       LedgerTransactionRepository transactions, LedgerEntryRepository entries,
                                       AccountRepository accounts, InstitutionRepository institutions,
                                       TransferCorrelationRepository correlations, OutboxRepository outbox,
                                       AttestationService attestations, Pacs008Mapper pacs008, Pacs002Mapper pacs002) {
         this.properties = properties;
+        this.commitMetrics = commitMetrics;
         this.grants = grants;
         this.decisions = decisions;
         this.ledger = ledger;
@@ -253,6 +262,7 @@ public class CommitAuthorizationService {
         Decision decision = Decision.of(command.eventId(), command.authRef(), CommitOutcome.REJECTED, reason);
         decisions.save(decision);
         outbox.save(OutboxMessage.pending("PACS002", pacs002.toXml(decision)));
+        observe(command, CommitOutcome.REJECTED, reason);
         return new CommitResult(CommitOutcome.REJECTED, reason);
     }
 
@@ -310,7 +320,39 @@ public class CommitAuthorizationService {
 
     private CommitResult record(PaymentEventCommand command, CommitOutcome outcome, CommitReason reason) {
         decisions.save(Decision.of(command.eventId(), command.authRef(), outcome, reason));
+        observe(command, outcome, reason);
         return new CommitResult(outcome, reason);
+    }
+
+    /**
+     * Metrics and the commit log describe a decision that stayed committed. A rollback (lost race
+     * on the ledger unique index) must not count or log that row.
+     */
+    private void observe(PaymentEventCommand command, CommitOutcome outcome, CommitReason reason) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()
+                && TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publish(command.eventId(), outcome, reason);
+                }
+            });
+            return;
+        }
+        publish(command.eventId(), outcome, reason);
+    }
+
+    private void publish(String eventId, CommitOutcome outcome, CommitReason reason) {
+        commitMetrics.recordCommit(properties.getRole(), outcome, reason);
+        log.atInfo()
+                .addKeyValue("cta.role", CtaCommitMetrics.roleTag(properties.getRole()))
+                .addKeyValue("decision.outcome", outcome.name())
+                .addKeyValue("decision.reason", reason.name())
+                .log("payment commit");
+        log.atDebug()
+                .addKeyValue("event_id", eventId)
+                .addKeyValue("decision.reason", reason.name())
+                .log("payment commit event recorded");
     }
 
     private Map<UUID, Account> lockAccounts(UUID first, UUID second) {
