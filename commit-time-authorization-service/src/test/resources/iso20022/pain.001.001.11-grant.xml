@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.001.001.11">
+  <CstmrCdtTrfInitn>
+    <GrpHdr>
+      <MsgId>MSG-GRANT-1</MsgId>
+      <CreDtTm>2026-11-23T12:00:00Z</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+    </GrpHdr>
+    <PmtInf>
+      <PmtInfId>PMT-1</PmtInfId>
+      <PmtMtd>TRF</PmtMtd>
+      <NbOfTxs>1</NbOfTxs>
+      <Dbtr>
+        <Nm>Payer</Nm>
+      </Dbtr>
+      <DbtrAcct>
+        <Id>
+          <Othr>
+            <Id>11111111-1111-1111-1111-111111111111</Id>
+          </Othr>
+        </Id>
+      </DbtrAcct>
+      <CdtTrfTxInf>
+        <PmtId>
+          <EndToEndId>AUTH-SEMINAR-1</EndToEndId>
+        </PmtId>
+        <Amt>
+          <InstdAmt Ccy="NGN">10.00</InstdAmt>
+        </Amt>
+        <Cdtr>
+          <Nm>Payee</Nm>
+        </Cdtr>
+        <CdtrAcct>
+          <Id>
+            <Othr>
+              <Id>22222222-2222-2222-2222-222222222222</Id>
+            </Othr>
+          </Id>
+        </CdtrAcct>
+      </CdtTrfTxInf>
+    </PmtInf>
+  </CstmrCdtTrfInitn>
+</Document>

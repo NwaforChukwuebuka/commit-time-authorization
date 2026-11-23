@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.07">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>MSG-SEMINAR-1</MsgId>
+      <CreDtTm>2026-11-23T11:00:00Z</CreDtTm>
+      <NbOfTxs>1</NbOfTxs>
+      <SttlmInf>
+        <SttlmMtd>INDA</SttlmMtd>
+      </SttlmInf>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <PmtId>
+        <InstrId>EVT-SEMINAR-1</InstrId>
+        <EndToEndId>AUTH-SEMINAR-1</EndToEndId>
+      </PmtId>
+      <IntrBkSttlmAmt Ccy="NGN">10.00</IntrBkSttlmAmt>
+      <AccptncDtTm>2026-11-23T12:00:00Z</AccptncDtTm>
+      <Dbtr>
+        <Nm>Payer</Nm>
+      </Dbtr>
+      <DbtrAcct>
+        <Id>
+          <Othr>
+            <Id>11111111-1111-1111-1111-111111111111</Id>
+          </Othr>
+        </Id>
+      </DbtrAcct>
+      <Cdtr>
+        <Nm>Payee</Nm>
+      </Cdtr>
+      <CdtrAcct>
+        <Id>
+          <Othr>
+            <Id>22222222-2222-2222-2222-222222222222</Id>
+          </Othr>
+        </Id>
+      </CdtrAcct>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>
