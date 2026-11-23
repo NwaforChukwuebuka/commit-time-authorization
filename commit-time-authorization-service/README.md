@@ -69,6 +69,18 @@ The cloned routes `POST /accounts` and `POST /transactions` are unchanged.
 
 `./mvnw -Pcta-eval test` runs seeds `11, 23, 37, 41, 59` at the full evaluation size and writes `../results-java.json` at the workspace root (or `results-java.json` here when the module is the repo root). CTA outcome counts are the acceptance criteria (`invalid_total` 0, `false_rejections` 0, and the reason histogram). Wall time and latency are recorded for the paper.
 
+## Operations
+
+[RUNBOOK.md](RUNBOOK.md) is the operator guide: single-bank grant and payment-event flow, the two-bank Compose smoke, evaluation, and the security scans. Actuator is on the application port with no authentication, for localhost only.
+
+| Endpoint | Use |
+| --- | --- |
+| `GET /actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` | Process and database probes |
+| `GET /actuator/prometheus` | HTTP timers, `ledger_transactions_total`, `ledger_api_errors_total`, and `cta_commits_total{role,outcome,reason}` |
+| API logs | One JSON line per durable decision: `decision.outcome` and `decision.reason` |
+
+CI (`.github/workflows/ci.yml`) runs Maven verify, Gitleaks on git history, and OWASP Dependency-Check (`security-audit` profile, fail at CVSS 9). Those jobs are not a production deployment.
+
 ---
 
 # Idempotent Payment Ledger API
@@ -248,7 +260,7 @@ The integration tests use **JUnit 5 + Testcontainers**. They start a throwaway `
 - **Concurrency:** 16 parallel payments with the same key produce exactly 1 transaction and 2 entries. 12 parallel refunds with the same key produce 1 refund. 10 parallel refunds with different keys produce 1 success and 9 conflicts. 20 parallel payments against a 100.00 balance produce exactly 10 posted, 10 failed, and a final balance of 0.
 - **Ledger:** balanced entries; account balances equal the sum of their entries; the global sum of debits equals the sum of credits; refund reversal; refund rules.
 - **Database constraints:** an unbalanced insert is rejected at commit; UPDATE and DELETE on entries are rejected; a duplicate key is rejected by `UNIQUE`; an overdraft is rejected by `CHECK`.
-- **Metrics:** transaction counters by outcome, including a concurrent same-key burst (1 `posted`, the rest `replayed`); the Prometheus scrape contains HTTP and ledger metrics but no keys, ids or amounts; health shows the db component plus liveness and readiness probes.
+- **Metrics:** transaction counters by outcome, including a concurrent same-key burst (1 `posted`, the rest `replayed`); commit decisions counted as `cta_commits_total` by role, outcome, and `decision.reason`; the Prometheus scrape contains HTTP, ledger, and CTA metrics but no keys, ids or amounts; health shows the db component plus liveness and readiness probes.
 - **Restart durability:** a payment is created by one application instance, that instance is shut down, and a new instance against the same database replays the request: same id, still 1 row and 2 entries.
 
 ## Operational validation
@@ -258,7 +270,7 @@ Three things are layered on top of the tests: metrics, a k6 load test, and a Doc
 | What | Where |
 |---|---|
 | Health and probes | `GET /actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness` |
-| Prometheus metrics | `GET /actuator/prometheus`: `http_server_requests_seconds_*` (count, latency histogram, status/outcome) plus `ledger_transactions_total{type,outcome}` and `ledger_api_errors_total{code}` |
+| Prometheus metrics | `GET /actuator/prometheus`: `http_server_requests_seconds_*` (count, latency histogram, status/outcome), `ledger_transactions_total{type,outcome}`, `ledger_api_errors_total{code}`, and `cta_commits_total{role,outcome,reason}` |
 | Load test + DB verification | `scripts/load-test.sh` (k6 in Docker, then `scripts/verify-ledger.sh`) |
 | Restart / recovery | `scripts/recovery-check.sh` (isolated Compose project; recreates the API and PostgreSQL containers) |
 
@@ -266,7 +278,7 @@ All of this is local validation. It is not a deployed service and not a capacity
 
 ## Deliberate scope limits
 
-No authentication or multi-tenancy, so idempotency keys are global. In production they would be scoped per client and expired after a retention window. Refunds are full refunds only, and there is no currency conversion. The actuator endpoints are unauthenticated and served on the application port, which suits local use only.
+No authentication or multi-tenancy, so idempotency keys are global. In production they would be scoped per client and expired after a retention window. Refunds are full refunds only, and there is no currency conversion. The actuator endpoints are unauthenticated and served on the application port, which suits local use only. Dependency-Check fails the audit profile at CVSS 9 or higher; lower findings stay in the HTML report and are not treated as a release gate. Embedded Tomcat is pinned to 10.1.62, past the CVSS 9 fixes in 10.1.58. Spring Framework stays on 6.2.19 because that is the newest 6.2 build Spring Boot 3.5.16 manages; the CVSS 9 Spring issues are in XsltView, WebFlux, SSE, and the SpEL compiler, which this API does not use, and they are listed in `dependency-check-suppressions.xml` until a 6.2.20-or-later Boot 3.5 release exists. The in-process queue is not durable across a crash.
 
 ## License
 

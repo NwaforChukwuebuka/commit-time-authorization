@@ -68,14 +68,14 @@ Without a local JDK, run the same command in a container. The socket mount lets 
 docker run --rm -v "$PWD":/app -w /app -v ledger-m2:/root/.m2 -v /var/run/docker.sock:/var/run/docker.sock -e TESTCONTAINERS_HOST_OVERRIDE=host.docker.internal eclipse-temurin:21-jdk ./mvnw -B clean verify
 ```
 
-Expected: `Tests run: 33, Failures: 0, Errors: 0, Skipped: 0` and `BUILD SUCCESS`.
+Expected: `BUILD SUCCESS` and `Failures: 0, Errors: 0`. The `Tests run` count changes as scenarios are added; use the number printed by that command, or the CI log.
 
 ## 5. Health and metrics
 
 ```bash
 curl -s localhost:8080/actuator/health              # {"status":"UP", ... "db":{"status":"UP"} ...}
 curl -s localhost:8080/actuator/health/readiness    # {"status":"UP"}
-curl -s localhost:8080/actuator/prometheus | grep -E '^(ledger_|http_server_requests_seconds_count)'
+curl -s localhost:8080/actuator/prometheus | grep -E '^(ledger_|cta_commits_|http_server_requests_seconds_count)'
 curl -s localhost:8080/actuator/metrics/http.server.requests   # JSON view of one metric
 ```
 
@@ -85,12 +85,19 @@ curl -s localhost:8080/actuator/metrics/http.server.requests   # JSON view of on
 | `http_server_requests_seconds_bucket` | same + `le` | latency histogram (1 ms – 5 s) for `histogram_quantile(...)` |
 | `ledger_transactions_total` | `type` = `payment`/`refund`, `outcome` = `posted`/`failed`/`replayed` | committed results of create/refund calls; `failed` = recorded business failure (e.g. insufficient funds); `replayed` = idempotent replay |
 | `ledger_api_errors_total` | `code` (e.g. `IDEMPOTENCY_KEY_REUSED`, `TRANSACTION_ALREADY_REFUNDED`, `VALIDATION_FAILED`) | problem+json error responses by stable error code |
+| `cta_commits_total` | `role` = `intra`/`payer`/`payee`, `outcome` = `committed`/`duplicate`/`rejected`/`declined`, `reason` = `decision.reason` (`OK`, `P1_EVENT_ALREADY_COMMITTED`, and the other commit reasons) | one count per durable commit decision. Ids, grant refs, accounts, and amounts are not tags. A rejected credit that also queues `pacs.002` is counted here. |
 | standard JVM / HikariCP / Tomcat / process metrics | | provided by Spring Boot Actuator |
 
 Design notes:
 - Tags come only from small fixed sets. Ids, amounts and idempotency keys never appear in metrics; `MetricsIntegrationTest` asserts this.
 - Ledger counters are incremented in the controller, after the service's transaction has committed, so a counted transaction is a durable one.
 - The constraint-violation log line drops PostgreSQL's `Detail:` line, which would otherwise echo row values such as keys.
+- `cta_commits_total` is incremented only after the decision's database transaction commits. A rolled-back race does not increment it.
+- Console logs are JSON (`logging.structured.format.console=logstash`). Each durable decision is one INFO line, message `payment commit`, with `cta.role`, `decision.outcome` (enum name, for example `COMMITTED`), and `decision.reason` (the same token stored on `decision.reason` and copied to pacs.002 `StsRsnInf/Rsn/Prtry`). The line does not include account ids, amounts, or the attestation. `event_id` is logged only at DEBUG.
+
+```json
+{"message":"payment commit","level":"INFO","cta.role":"intra","decision.outcome":"COMMITTED","decision.reason":"OK"}
+```
 
 ## 6. Load test
 
@@ -190,7 +197,90 @@ The automated counterpart in the Maven suite is `ApplicationRestartIntegrationTe
 5. **Restart / recovery (2 min).** Run `scripts/recovery-check.sh`. The API container is replaced and the replay still returns the same transaction. Then Postgres is replaced, and the same API process reconnects with nothing lost.
 6. **Close (1 min).** Name where correctness lives: the unique constraint, row locks, the deferred trigger. Then name what this does not show: real traffic, multiple instances behind a load balancer, auth, key expiry.
 
-## 10. Troubleshooting
+## 10. Commit-time authorization (single bank)
+
+`docker compose up` (see §3) runs one API as institution `LOCAL`, `cta.role=INTRA`. Both customer accounts are in this database. `Idempotency-Key` on `POST /api/v1/payment-events` is transport metadata. The grant is the customer approval.
+
+1. Create a funding account and two NGN customer accounts with `POST /accounts` (see the README examples; use `"currency":"NGN"`). Fund the payer from the funding account with `POST /transactions`.
+2. Issue a grant. The response `authRef` is the approval id.
+
+```bash
+curl -s -D - localhost:8080/api/v1/grants -H 'Content-Type: application/json' \
+  -d '{"payerAccountId":"<PAYER>","payeeAccountId":"<PAYEE>","amount":"10.00","currency":"NGN"}'
+```
+
+3. Enqueue the payment. This returns `202` and does not post. The worker calls `commitIntraBank`.
+
+```bash
+curl -s -D - localhost:8080/api/v1/payment-events -H 'Content-Type: application/json' \
+  -d '{"eventId":"EVT-demo-1","authRef":"<AUTH_REF>","payerAccountId":"<PAYER>","payeeAccountId":"<PAYEE>","amount":"10.00","currency":"NGN","issuedAt":"2026-11-23T12:00:00Z"}'
+```
+
+4. Read the decision. The first row is `COMMITTED` / `OK`. The payer balance is 10.00 lower and the payee is 10.00 higher.
+
+```bash
+curl -s "localhost:8080/api/v1/decisions?eventId=EVT-demo-1"
+curl -s localhost:8080/actuator/prometheus | grep 'cta_commits_total'
+```
+
+5. Sequential redelivery (S1): send the same `eventId` again. A second decision row is `DUPLICATE` / `P1_EVENT_ALREADY_COMMITTED`. There is still one ledger effect. `cta_commits_total{role="intra",outcome="duplicate",reason="P1_EVENT_ALREADY_COMMITTED"}` increases by one. The API log contains `"decision.reason":"P1_EVENT_ALREADY_COMMITTED"`.
+
+`GET /api/v1/decisions?eventId=EVT-demo-1` with `Accept: application/xml` returns one pacs.002 for the latest decision. `Prtry` is that reason code.
+
+## 11. Two banks
+
+Generate a local attestation key pair first. The PEMs stay under `secrets/interbank-fixture/` and are gitignored. They are not production keys.
+
+```powershell
+.\scripts\generate-interbank-fixture.ps1
+docker compose -f docker-compose.interbank.yml up -d --build --wait
+```
+
+| Process | Host port | `cta.role` | Database host port | What it does |
+|---|---|---|---|---|
+| `bank-a` | 8081 | `PAYER` | 5434 | Debits the payer, signs the attestation, relays `pacs.008` to Bank B |
+| `bank-b` | 8082 | `PAYEE` | 5435 | Verifies the attestation and credits the payee once per `EndToEndId` |
+
+`end_to_end_id` is the grant's `auth_ref`. Bank B does not read Bank A's grant table.
+
+Smoke:
+
+1. On Bank A (`localhost:8081`), create and fund an NGN payer. On Bank B (`localhost:8082`), create an NGN payee. Bank A's grant may name Bank B's payee account id; that id is not a row in Bank A's database.
+2. `POST /api/v1/grants` on Bank A, then `POST /api/v1/payment-events` with `issuedAt` within the last 300 seconds. The outbox relay posts `pacs.008` to Bank B within about a second.
+3. Bank A decisions for that `eventId` show `COMMITTED` / `OK`. Bank B decisions show `COMMITTED` / `OK` for the same end-to-end id. Each bank's `cta_commits_total` uses `role="payer"` or `role="payee"`.
+4. Deliver the same `pacs.008` to Bank B again (`POST /api/v1/iso/pacs.008`, `Content-Type: application/xml`), including one with a new `MsgId`. Bank B records `DUPLICATE` / `P1_TRANSFER_ALREADY_CREDITED` or `P1_EVENT_ALREADY_COMMITTED` and does not credit again.
+
+Stop the stack with `docker compose -f docker-compose.interbank.yml down`. Add `-v` to delete the two database volumes.
+
+## 12. Evaluation workload
+
+From this directory, the full five-seed run writes `../results-java.json` (or `results-java.json` here when this module is the git root):
+
+```bash
+./mvnw -B -Pcta-eval test
+```
+
+`./mvnw test` stays on the smaller smoke (seed 11) and does not replace that file. Copy counts from the JSON into the paper. Do not invent a throughput figure.
+
+## 13. Security scans
+
+CI (`.github/workflows/ci.yml`) runs three jobs, all with `contents: read`:
+
+| Job | What it does |
+|---|---|
+| Maven verify | `./mvnw -B clean verify` (Testcontainers) |
+| Gitleaks | `gitleaks/gitleaks-action@v2` on full git history. It does not scan gitignored `load-test/results/`. A license secret is required only when the repository belongs to a GitHub organization. |
+| OWASP Dependency-Check | `./mvnw -Psecurity-audit -DskipTests org.owasp:dependency-check-maven:check`. Fails on CVSS 9 or higher. The first NVD sync without `NVD_API_KEY` can take most of an hour; later runs use the cached database. |
+
+The same dependency scan locally:
+
+```bash
+./mvnw -B -Psecurity-audit -DskipTests org.owasp:dependency-check-maven:check
+```
+
+The HTML report is `target/dependency-check-report.html`. The profile is not part of a normal `./mvnw verify`.
+
+## 14. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -198,3 +288,7 @@ The automated counterpart in the Maven suite is `ApplicationRestartIntegrationTe
 | `load-test: API is not reachable` | Start the stack first, or set `BASE_URL` |
 | `verify-ledger: PostgreSQL … is not running` | The verifier needs the Compose Postgres. If the API runs elsewhere, point `COMPOSE_PROJECT` at the right project |
 | k6 thresholds fail only on `p(95)` | The machine is overloaded. Lower `VUS` or raise `SLEEP_SECONDS`. The correctness checks are what matter |
+| Payment event stays at `202` and no decision appears | The in-process worker is off when `cta.ingress.worker-enabled=false` (tests call `CommitWorker.drain`). In Compose the worker is on. Check the API log for `Commit worker dropped a command`. |
+| Credit reason `P4_ATTESTATION_INVALID` | Bank B could not verify Bank A's signature, or the amount, currency, or accounts do not match the attestation. Regenerate `secrets/interbank-fixture/` and restart both banks so they load the same public key. |
+| Log line `Outbox … was not delivered` | The relay could not POST `pacs.008` or `pacs.002`. Confirm the other bank is healthy and `CTA_HUB_PACS008_URL` / `CTA_HUB_PACS002_URL` point at it. The message stays unpublished and is retried. |
+| Dependency-Check stalls on NVD | Set `NVD_API_KEY` (a free NVD API key) and rerun the profile. The data cache is `~/.m2/dependency-check-data`. |

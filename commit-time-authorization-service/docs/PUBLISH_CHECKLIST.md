@@ -5,13 +5,15 @@ Steps to take before and right after making this repository public on GitHub. No
 ## 1. Final local verification
 
 - [ ] Working tree is clean and on the intended branch: `git status`, `git log --oneline -5`
-- [ ] Full build and tests pass: `./mvnw -B clean verify` (or the containerised command in [MEASUREMENT_REPORT.md](MEASUREMENT_REPORT.md#3-automated-test-evidence)). Expect `Tests run: 33, Failures: 0, Errors: 0, Skipped: 0`.
+- [ ] Full build and tests pass: `./mvnw -B clean verify` (or the containerised command in [MEASUREMENT_REPORT.md](MEASUREMENT_REPORT.md#3-automated-test-evidence)). Expect `Failures: 0, Errors: 0` and `BUILD SUCCESS`. The `Tests run` count is whatever that command prints.
 - [ ] CI workflow lints cleanly: `docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:1.7.12 -no-color`
 - [ ] Optional, slower: `docker compose up -d --build --wait && scripts/load-test.sh`, then `scripts/recovery-check.sh`, then `docker compose down`
 
 ## 2. Secret and privacy scan before the first push
 
-- [ ] Scan the full history and the tracked tree:
+CI runs Gitleaks on every push and pull request (`.github/workflows/ci.yml`, job `gitleaks`). That job scans git history only. It does not see gitignored `load-test/results/`. The checklist below is an optional extra before the first push, useful when CI has not run yet.
+
+- [ ] Optional extra: scan the full history and the tracked tree locally:
 
   ```bash
   docker run --rm -v "$PWD":/repo:ro -e HOME=/tmp --entrypoint sh zricethezav/gitleaks:v8.30.1 -c \
@@ -39,6 +41,7 @@ Steps to take before and right after making this repository public on GitHub. No
 - [ ] **Settings → Security → Secret scanning: enable**, and enable **Push protection**.
 - [ ] Keep **Actions → General → Workflow permissions** at the read-only default. The workflow itself requests only `contents: read`.
 - [ ] Optional: enable Dependabot alerts for Maven dependencies.
+- [ ] Optional: add a repository secret `NVD_API_KEY` so the Dependency-Check job is not limited to the anonymous NVD rate. The job still runs without it and fails only on CVSS 9+.
 
 ## 4. README and claims review
 
@@ -49,14 +52,15 @@ Steps to take before and right after making this repository public on GitHub. No
 
 ## 5. CI status
 
-- [x] A workflow exists locally: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (push / pull_request / workflow_dispatch, Ubuntu 24.04, Temurin 21, `./mvnw -B clean verify`, `contents: read`). It passed actionlint locally.
+- [x] A workflow exists locally: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (push / pull_request / workflow_dispatch, Ubuntu 24.04, `contents: read`). Jobs: Maven verify (Temurin 21, `./mvnw -B clean verify`), Gitleaks (`gitleaks/gitleaks-action@v2` on git history), and OWASP Dependency-Check (`./mvnw -Psecurity-audit -DskipTests org.owasp:dependency-check-maven:check`, fail at CVSS 9). The default `./mvnw verify` does not run the dependency scan.
 - [ ] **GitHub-hosted CI has never run.** It can't be verified until a remote exists and a commit is pushed.
 
 ## 6. First-push verification
 
-- [ ] After the first push, open **Actions → CI** and confirm that the `Maven verify (JDK 21, Testcontainers)` job:
-  - shows the `docker version` step succeeding
-  - reports `Tests run: 33, Failures: 0, Errors: 0, Skipped: 0` and `BUILD SUCCESS` in the log
+- [ ] After the first push, open **Actions → CI** and confirm:
+  - `Maven verify (JDK 21, Testcontainers)` shows the `docker version` step succeeding and `BUILD SUCCESS` with `Failures: 0, Errors: 0`
+  - `Gitleaks` succeeds (organization-owned repositories need a `GITLEAKS_LICENSE` secret; personal accounts do not)
+  - `OWASP Dependency-Check` succeeds, or the report's CVSS 9+ findings are fixed before treating the branch as releasable
 - [ ] If it fails, download the `surefire-reports` artifact uploaded by the failure step.
 - [ ] Optional, only after a green run: add a CI status badge to the README using the real repository URL.
 - [ ] Confirm that GitHub's secret-scanning tab shows no alerts.
