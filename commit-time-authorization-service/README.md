@@ -34,7 +34,13 @@ Each bank has a local NGN settlement account that can go negative. The cloned le
 
 Bank A signs a debit attestation (`SHA256withECDSA`, P-256) and puts the JSON in `pacs.008` `SplmtryData`. An outbox relay posts that XML to Bank B. Bank B credits once per `EndToEndId`. A second delivery, including one with a new `MsgId` and `InstrId`, does not credit again. A rejected credit is a `pacs.002`. Bank A sets the transfer to `REJECTED`. `POST /api/v1/transfers/{endToEndId}/reverse` posts one compensating refund. Calling it again does not post again.
 
-The key pair in the compose file is a local fixture for this run, not a production key. `end_to_end_id` is the grant's `auth_ref`.
+Before the two-bank stack, generate a local attestation key pair (gitignored under `secrets/interbank-fixture/`):
+
+```powershell
+.\scripts\generate-interbank-fixture.ps1
+```
+
+That pair is only for local Compose; it is not a production key. `end_to_end_id` is the grant's `auth_ref`.
 
 ## `/api/v1`
 

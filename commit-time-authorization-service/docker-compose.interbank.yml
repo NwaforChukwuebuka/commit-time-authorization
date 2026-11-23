@@ -1,0 +1,95 @@
+# Two banks, one image. Bank A debits. Bank B credits. Each has its own Postgres.
+#   ./scripts/generate-interbank-fixture.ps1   # or generate-interbank-fixture.sh
+#   docker compose -f docker-compose.interbank.yml up -d --build --wait
+# Attestation PEMs live under secrets/interbank-fixture/ (gitignored). Never commit them.
+name: cta-interbank
+
+services:
+  postgres-a:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ledger
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - ledger-a:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres-b:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ledger
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+    ports:
+      - "127.0.0.1:5435:5432"
+    volumes:
+      - ledger-b:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bank-a:
+    build: .
+    image: cta-service
+    depends_on:
+      postgres-a:
+        condition: service_healthy
+    volumes:
+      - ./secrets/interbank-fixture:/run/cta-keys:ro
+    environment:
+      DB_URL: jdbc:postgresql://postgres-a:5432/ledger
+      DB_USERNAME: ledger
+      DB_PASSWORD: ledger
+      CTA_INSTITUTION_ID: BANKA
+      CTA_ROLE: PAYER
+      CTA_COUNTERPARTY_INSTITUTION_ID: BANKB
+      CTA_HUB_PACS008_URL: http://bank-b:8080/api/v1/iso/pacs.008
+      CTA_ATTESTATION_PRIVATE_KEY_PEM: file:/run/cta-keys/payer-private.pem
+      CTA_ATTESTATION_PAYER_PUBLIC_KEY_PEM: file:/run/cta-keys/payer-public.pem
+    ports:
+      - "127.0.0.1:8081:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 40s
+      retries: 12
+
+  bank-b:
+    image: cta-service
+    depends_on:
+      bank-a:
+        condition: service_started
+      postgres-b:
+        condition: service_healthy
+    volumes:
+      - ./secrets/interbank-fixture:/run/cta-keys:ro
+    environment:
+      DB_URL: jdbc:postgresql://postgres-b:5432/ledger
+      DB_PASSWORD: ledger
+      DB_USERNAME: ledger
+      CTA_INSTITUTION_ID: BANKB
+      CTA_ROLE: PAYEE
+      CTA_HUB_PACS002_URL: http://bank-a:8080/api/v1/iso/pacs.002
+      CTA_ATTESTATION_PAYER_PUBLIC_KEY_PEM: file:/run/cta-keys/payer-public.pem
+    ports:
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 40s
+      retries: 12
+
+volumes:
+  ledger-a:
+  ledger-b:
