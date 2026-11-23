@@ -1,0 +1,21 @@
+# Python prototype (local only; paper uses Spring Boot service)
+cta_experiment.py
+*.py
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+results.json
+cta_experiement.py
+
+# Engineering plan (local)
+plan.md
+plan*.md
+
+# Thesis drafts and exports (local only)
+Development and Evaluation of a Commit-Time Authorization Model*
+info/
+
+# Local tooling
+graphify-out/

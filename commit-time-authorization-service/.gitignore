@@ -1,0 +1,47 @@
+target/
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# environment and credentials
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.jks
+secrets/
+credentials*
+
+# logs
+*.log
+logs/
+
+# local data
+*.db
+*.sqlite
+*.sqlite3
+pgdata/
+postgres-data/
+data/
+
+# caches and build tools
+.m2/
+.gradle/
+build/
+.mvn/wrapper/*.jar
+*.tar.gz
+
+# Local plan and thesis (not published)
+plan.md
+plan*.md
+FINAL_PROJECT_REPORT.md
+Development and Evaluation of a Commit-Time Authorization Model*
+*.py
+__pycache__/
+results.json
+
+# Thesis / paper exports if copied into this tree
+papers/
+info/

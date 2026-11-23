@@ -1,0 +1,59 @@
+spring:
+  application:
+    name: idempotent-payment-ledger
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/ledger}
+    username: ${DB_USERNAME:ledger}
+    password: ${DB_PASSWORD:ledger}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  api-docs:
+    path: /v3/api-docs
+
+# Operational endpoints for local use. They are served on the application port without auth;
+# a real deployment would move them to a separate management port and restrict access.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-components: always   # component status only (db, diskSpace), no connection details
+      probes:
+        enabled: true           # /actuator/health/liveness and /actuator/health/readiness
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    distribution:
+      # Histogram buckets for http.server.requests so latency percentiles can be derived
+      # (e.g. histogram_quantile in Prometheus). Bounded to keep the bucket count small.
+      percentiles-histogram:
+        http.server.requests: true
+      minimum-expected-value:
+        http.server.requests: 1ms
+      maximum-expected-value:
+        http.server.requests: 5s
+
+# Single-bank commit-time authorization. role INTRA keeps both accounts in this database.
+cta:
+  freshness-seconds: 300
+  institution-id: LOCAL
+  role: INTRA
+  ingress:
+    worker-enabled: true
