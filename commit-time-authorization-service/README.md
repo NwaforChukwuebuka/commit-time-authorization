@@ -2,7 +2,7 @@
 
 Spring Boot reference implementation for commit-time authorization (CTA) on replayed payment events in digital banking.
 
-This module began as a clone of [idempotent-payment-ledger](https://github.com/omerbar4/idempotent-payment-ledger) (MIT) and was reshaped for the thesis work. It lives in the parent workspace `commit-time-authorization/` next to local paper drafts and `results-java.json` (evaluation output from `./mvnw -Pcta-eval test`).
+This directory is the service in the [`commit-time-authorization`](../README.md) repository. It began as a clone of [idempotent-payment-ledger](https://github.com/omerbar4/idempotent-payment-ledger) (MIT) and was reshaped so a single-use grant, not an idempotency key, authorizes a post. `./mvnw -Pcta-eval test` writes `../results-java.json`.
 
 `iso-examples/` is a clone of [prowide-iso20022-examples](https://github.com/prowide/prowide-iso20022-examples). It is fixture XML only and is not a Maven module. ISO messages are parsed with the `pw-iso20022` dependency.
 
@@ -103,7 +103,7 @@ docker compose down                             # stop (add -v to also delete th
 
 Swagger UI is then at http://localhost:8080/swagger-ui.html. If port 5432 or 8080 is taken, set `POSTGRES_PORT` / `API_PORT`; see [Running locally](#running-locally).
 
-**Documentation:** [RUNBOOK.md](RUNBOOK.md) covers operations, the load test, the recovery check and an interview demo. [docs/MEASUREMENT_REPORT.md](docs/MEASUREMENT_REPORT.md) has the reproducible test and latency evidence. [docs/PUBLISH_CHECKLIST.md](docs/PUBLISH_CHECKLIST.md) is the release checklist. [FINAL_PROJECT_REPORT.md](FINAL_PROJECT_REPORT.md) is the full engineering report.
+**Documentation:** [RUNBOOK.md](RUNBOOK.md) covers operations, the load test, the recovery check and an interview demo. [docs/MEASUREMENT_REPORT.md](docs/MEASUREMENT_REPORT.md) has the reproducible test and latency evidence. [docs/PUBLISH_CHECKLIST.md](docs/PUBLISH_CHECKLIST.md) is the release checklist. The sections below this heading document the cloned `/accounts` and `/transactions` API. The CTA API is the `/api/v1` table above.
 
 > **Scope:** this is a portfolio project that has been validated locally and in containers. It is not deployed, not production-operated, and its load-test figures are not a capacity benchmark.
 
@@ -252,7 +252,7 @@ Ports are configurable: `POSTGRES_PORT` defaults to 5433 and `API_PORT` to 8080.
 ./mvnw clean verify
 ```
 
-Continuous integration: [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs the same command (JDK 21, Testcontainers on the runner's Docker) on every push and pull request.
+The workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs that command (JDK 21, Testcontainers) plus Gitleaks and OWASP Dependency-Check. GitHub Actions loads workflows from the repository root, so this file runs when this directory is the root of the checkout.
 
 The integration tests use **JUnit 5 + Testcontainers**. They start a throwaway `postgres:16-alpine` container (Docker must be running) and exercise the real HTTP API on a random port. They cover:
 
